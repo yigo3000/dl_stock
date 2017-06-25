@@ -1,14 +1,17 @@
 #-*- coding: UTF-8 -*-
-#运行 mpiexec.exe -np 16 python mytrade.py
+#class input_data():获取指定日期、编号的股票的输入向量。具有以下特点：
+#1. 如果指定日期不是交易日，input_data=[]
+#2. 
+#class input_data_label(input_data)：额外可以获取label。考虑了以下情况：
+#1. 目标卖出日大于今天，还没有数据，所以不能用来训练，需要将input_data=[]。
+#2. 
+
+'''
 #macro
 HS300_SUB_RAISE=0.1 #指标：沪深300涨幅减去个股涨幅大于10%
 REBOUND_FROM_LOWEST=0.1
 VOLUME_RAISE_FROM_LOWEST=0.5
 def get_ultra_plunge(df_start_date,df_end_date):
-    '''
-    找到跌幅大于PLUNGE_RANGE的,且沪指涨幅减去该股涨幅小于PLUNGE_SUB_HUZHI
-    :return: dict{"ticker0":这段时间的涨幅，"ticker":涨幅，...}, 沪指涨幅
-    '''
     PLUNGE_RANGE=0.10
     pass
 
@@ -42,10 +45,6 @@ if __name__ == "__main__":
     import tushare as ts
     import pickle
 
-    '''
-    yejis=ts.get_report_data(2016,1)#获取业绩报表
-    with open('yejis.pkl',"wb") as f:
-        pickle.dump(yejis,f)'''
     with open('yejis.pkl','rb') as f:#从文件获取业绩报表
         yejis = pickle.load(f)
 
@@ -96,28 +95,140 @@ if __name__ == "__main__":
     print("process %s finished." %comm_rank)
     result.to_csv("result.csv")
     #print(result)
+'''
 
-
-#把时间跨度设为一个月的记录: 只搜低估10%，会搜出很多（以2016年6月1日至30日为例，找到153个）。
-#增加条件：从最低点反弹不超过5%，得到的几乎全都是分红股
-#增加条件:(tmp_close-tmp_lowest)/tmp_lowest<0.10 and tmp_raise>-0.20,得到的大部分ok，不行的股：300083，002496
-#测试从3月15到4月15（上涨，之后从4月16大盘开始暴跌），得出结论：大盘跌，几乎不能找到赚钱的个股。
-
-#增加条件：成交量缩减
-
+PROFIT_RATE = 0.1 #目标收益率
+SOLD_DATE = 30 #从今天算起，卖出的天数。如果今天买，SOLD_DATE之内有达到过PROFIT_RATE，lable为1;否则lable为0
+from datetime import date
+from datetime import timedelta
+import tushare as ts
+import pickle
+import numpy as np
 #输入指定股票的指定日期，得到用来训练的vector（numpy类型）
 class input_data():
-    def __init__(self):
-        k_data=ts.get_k_data(2016,1)
+    def __init__(self, ticker,date):
+        self.ticker = ticker
+        self.buy_date = date
+        self.buy_date_str = date_to_str(self.buy_date)
+        self.sold_date = date+timedelta(SOLD_DATE)
+        self.sold_date_str = date_to_str(self.sold_date)
+        self.input_data = []
+        self.label = None
+    def get_input_data(self):
+        #取日线行情:
+        data_day_0 = ts.get_k_data(self.ticker, ktype='d', autype='hfq',index=False,start=self.buy_date_str, end=self.sold_date_str)
+        data_day_1 = ts.get_hist_data(self.ticker, ktype='D', start=self.buy_date_str,end=self.buy_date_str)
+        data_week_1 = ts.get_hist_data(self.ticker, ktype='W', start=date_to_str(self.buy_date-timedelta(6)), end=self.buy_date_str)
 
-    def jllll(self):
-        #获取后复权的周线
-        ts.get_k_data('600000', ktype='W', autype='hfq')
-        #取沪深300指数10月份日线行情：
-        ts.get_k_data('399300', index=True,start='2016-10-01', end='2016-10-31')
+        #检查buydate是否存在
+        if(data_day_0.iloc[0,0] != self.buy_date_str):
+            return None
+        #价格
+        self.price = [data_day_0.iloc[0,2],data_day_1.iloc[0,7],data_day_1.iloc[0,8],data_day_1.iloc[0,9],
+                 data_week_1.iloc[0,7],data_week_1.iloc[0,8],data_week_1.iloc[0,9]]
+                 #内容：price, ma5，ma10,ma20,w_ma5,w_ma10,w_ma20
+        price = normalize(np.array(self.price))
+
+        #成交量
+        self.volume = [data_day_0.iloc[0,5],data_day_1.iloc[0,10],data_day_1.iloc[0,11],data_day_1.iloc[0,12],
+                    data_week_1.iloc[0, 10], data_week_1.iloc[0, 11], data_week_1.iloc[0, 12] ]
+                 # 内容：volume, v_ma5，v_ma10,v_ma20,v_w_ma5,v_w_ma10,v_w_ma20
+        volume = normalize(np.array(self.volume))
+
+        #中小板指数
+        data_day_0 = ts.get_k_data('zxb', ktype='d', autype='hfq', index=False, start=self.buy_date_str,
+                                   end=self.buy_date_str)
+        data_day_1 = ts.get_hist_data('zxb', ktype='D', start=self.buy_date_str, end=self.buy_date_str)
+        data_week_1 = ts.get_hist_data('zxb', ktype='W', start=date_to_str(self.buy_date - timedelta(6)),
+                                       end=self.buy_date_str)
+        self.index_price = [data_day_0.iloc[0,2],data_day_1.iloc[0,7],data_day_1.iloc[0,8],data_day_1.iloc[0,9],
+                 data_week_1.iloc[0,7],data_week_1.iloc[0,8],data_week_1.iloc[0,9]]
+                 #内容：price, ma5，ma10,ma20,w_ma5,w_ma10,w_ma20
+        index_price = normalize(np.array(self.index_price))
+        index_volume = [data_day_0.iloc[0,5],data_day_1.iloc[0,10],data_day_1.iloc[0,11],data_day_1.iloc[0,12],
+                    data_week_1.iloc[0, 10], data_week_1.iloc[0, 11], data_week_1.iloc[0, 12] ]
+        index_volume = normalize(np.array(index_volume))
+                 # 内容：volume, v_ma5，v_ma10,v_ma20,v_w_ma5,v_w_ma10,v_w_ma20
+
+        #财务数据
+        self.report = self._get_report_data()
+        #self.input_data =
+
+    
+    def _get_report_data(self):
+        '''
+        report data必须一次性获取全部股票的全部数据。每次下载很慢，所以保存到本地文件中。包括
+        code,代码
+        name,名称
+        esp,每股收益
+        eps_yoy,每股收益同比(%)
+        bvps,每股净资产
+        roe,净资产收益率(%)
+        epcf,每股现金流量(元)
+        net_profits,净利润(万元)
+        profits_yoy,净利润同比(%)
+        distrib,分配方案
+        report_date,发布日期
+        :return: [eps_yoy,roe,profits_yoy]
+        '''
+        #season = int((self.buy_date.month - 2) / 3)  # 5,6,7看一季报,8910看二季报，11\12\1看三季报，2\3\4看年报
+        season = int((self.buy_date.month - 1) / 3)  # 4,5,6看一季报,789看二季报，10\11\12看三季报，1\2\3
+        year = self.buy_date.year #type: int
+        if season == 0:
+            season = 4
+            year = year-1#看上一年的4季报
+        tmp_report_date,tmp_report = self._load_report(year,season)
+        #如果0<report_date-buydate<90，不能用这个report,应该用上一个季度的erport
+        date_delt = tmp_report_date-self.buy_date
+        if(date_delt>0):
+            season=season-1
+            if season == 0:
+                season = 4
+                year = year-1
+        tmp_report_date,tmp_report = self._load_report(year,season)
+        return tmp_report
+    def _load_report(self,year,season):
+        #从本地或者网上取得report
+        #year: int
+        #season: int,1,2,3,4
+        try:#本地有记录
+            with open('report_'+str(year)+'_'+str(season)+'.pkl', "rb") as f:
+                report = pickle.load(f)
+        except:#本地没有存过
+            with open('report_' + str(year) + '_' + str(season) + '.pkl', "wb") as f:
+                report = ts.get_report_data(year, season)  # 获取业绩报表
+                pickle.dump(report, f)
+        for i in range(report.index.size):
+            if(report.iloc[i,0]==self.ticker):
+                if(season==4):#如果是4季报，发布年份是下一年
+                    report_year=year+1
+                else:
+                    report_year=year
+                report_date = date(report_year,int(report.iloc[i,10][0:2]),int(report.iloc[i,10][3:5]))#先看看报告日期.形如'06-16'
+                
+                eps_yoy = report.iloc[i,3]
+                roe = report.iloc[i,5]
+                profits_yoy = report.iloc[i,8]
+                break
+        return report_date,[eps_yoy,roe,profits_yoy]
+
+class input_data_label(input_data)：
+    def _get_label(self):
+        pass
+    
+def normalize(input_list):
+    #input_list: np.array
+    mean = input_list.mean()
+    std = input_list.std()
+    for i in range(len(input_list)):
+        input_list[i] = (input_list[i] - mean) / std
+    return input_list
+def date_to_str(date_python):#
+    return date_python.strftime('%Y-%m-%d')
 def main():
-    pass
-
+    one_date = date(2017,month=6,day=12)
+    one_ticker = '601600'
+    one_id = input_data(one_ticker,one_date)
 if __name__ == '__main__':
     main()
 
