@@ -5,7 +5,8 @@
 #class input_data_label(input_data)：额外可以获取label。考虑了以下情况：
 #1. 目标卖出日大于今天，还没有数据，所以不能用来训练，需要将input_data=[]。
 #2. 
-
+#方法：input_data.get_input_data()
+#input_data_label.get_input_data(), input_data_label.get_label_data()
 '''
 #macro
 HS300_SUB_RAISE=0.1 #指标：沪深300涨幅减去个股涨幅大于10%
@@ -110,42 +111,41 @@ class input_data():
         self.ticker = ticker
         self.buy_date = date
         self.buy_date_str = date_to_str(self.buy_date)
-        self.sold_date = date+timedelta(SOLD_DATE)
-        self.sold_date_str = date_to_str(self.sold_date)
+        
         self.input_data = []
         self.label = None
     def get_input_data(self):
         #取日线行情:
-        data_day_0 = ts.get_k_data(self.ticker, ktype='d', autype='hfq',index=False,start=self.buy_date_str, end=self.sold_date_str)
+        #data_day_0 = ts.get_k_data(self.ticker, ktype='d', autype='hfq',index=False,start=self.buy_date_str, end=self.buy_date_str)
         data_day_1 = ts.get_hist_data(self.ticker, ktype='D', start=self.buy_date_str,end=self.buy_date_str)
         data_week_1 = ts.get_hist_data(self.ticker, ktype='W', start=date_to_str(self.buy_date-timedelta(6)), end=self.buy_date_str)
 
         #检查buydate是否存在
-        if(data_day_0.iloc[0,0] != self.buy_date_str):
-            return None
+        if(data_day_1.iloc[0,0] != self.buy_date_str):
+            return []
         #价格
-        self.price = [data_day_0.iloc[0,2],data_day_1.iloc[0,7],data_day_1.iloc[0,8],data_day_1.iloc[0,9],
+        self.price = [data_day_1.iloc[0,2],data_day_1.iloc[0,7],data_day_1.iloc[0,8],data_day_1.iloc[0,9],
                  data_week_1.iloc[0,7],data_week_1.iloc[0,8],data_week_1.iloc[0,9]]
                  #内容：price, ma5，ma10,ma20,w_ma5,w_ma10,w_ma20
         price = normalize(np.array(self.price))
 
         #成交量
-        self.volume = [data_day_0.iloc[0,5],data_day_1.iloc[0,10],data_day_1.iloc[0,11],data_day_1.iloc[0,12],
+        self.volume = [data_day_1.iloc[0,5],data_day_1.iloc[0,10],data_day_1.iloc[0,11],data_day_1.iloc[0,12],
                     data_week_1.iloc[0, 10], data_week_1.iloc[0, 11], data_week_1.iloc[0, 12] ]
                  # 内容：volume, v_ma5，v_ma10,v_ma20,v_w_ma5,v_w_ma10,v_w_ma20
         volume = normalize(np.array(self.volume))
 
         #中小板指数
-        data_day_0 = ts.get_k_data('zxb', ktype='d', autype='hfq', index=False, start=self.buy_date_str,
-                                   end=self.buy_date_str)
+        #data_day_0 = ts.get_k_data('zxb', ktype='d', autype='hfq', index=False, start=self.buy_date_str,
+        #                           end=self.buy_date_str)
         data_day_1 = ts.get_hist_data('zxb', ktype='D', start=self.buy_date_str, end=self.buy_date_str)
         data_week_1 = ts.get_hist_data('zxb', ktype='W', start=date_to_str(self.buy_date - timedelta(6)),
                                        end=self.buy_date_str)
-        self.index_price = [data_day_0.iloc[0,2],data_day_1.iloc[0,7],data_day_1.iloc[0,8],data_day_1.iloc[0,9],
+        self.index_price = [data_day_1.iloc[0,2],data_day_1.iloc[0,7],data_day_1.iloc[0,8],data_day_1.iloc[0,9],
                  data_week_1.iloc[0,7],data_week_1.iloc[0,8],data_week_1.iloc[0,9]]
                  #内容：price, ma5，ma10,ma20,w_ma5,w_ma10,w_ma20
         index_price = normalize(np.array(self.index_price))
-        index_volume = [data_day_0.iloc[0,5],data_day_1.iloc[0,10],data_day_1.iloc[0,11],data_day_1.iloc[0,12],
+        index_volume = [data_day_1.iloc[0,5],data_day_1.iloc[0,10],data_day_1.iloc[0,11],data_day_1.iloc[0,12],
                     data_week_1.iloc[0, 10], data_week_1.iloc[0, 11], data_week_1.iloc[0, 12] ]
         index_volume = normalize(np.array(index_volume))
                  # 内容：volume, v_ma5，v_ma10,v_ma20,v_w_ma5,v_w_ma10,v_w_ma20
@@ -180,12 +180,13 @@ class input_data():
         tmp_report_date,tmp_report = self._load_report(year,season)
         #如果0<report_date-buydate<90，不能用这个report,应该用上一个季度的erport
         date_delt = tmp_report_date-self.buy_date
-        if(date_delt>0):
+        while(date_delt>0):#直到找出比buy_date更早的季报
             season=season-1
             if season == 0:
                 season = 4
                 year = year-1
-        tmp_report_date,tmp_report = self._load_report(year,season)
+            tmp_report_date,tmp_report = self._load_report(year,season)
+            date_delt = tmp_report_date-self.buy_date
         return tmp_report
     def _load_report(self,year,season):
         #从本地或者网上取得report
@@ -212,9 +213,22 @@ class input_data():
                 break
         return report_date,[eps_yoy,roe,profits_yoy]
 
-class input_data_label(input_data)：
+class input_data_label(input_data):
+    def __init__(self,ticker,date):
+        super(input_data_label,self).__init__(ticker,date)
+        self.label=0 #  1：盈利目标达到；0：没达到
+        self.sold_date = date+timedelta(SOLD_DATE)
+        self.sold_date_str = date_to_str(self.sold_date)
     def _get_label(self):
         pass
+    def get_label_data(self):
+        data_day_0 = ts.get_k_data(self.ticker, ktype='d', autype='hfq',index=False,start=self.buy_date_str, end=self.sold_date_str)
+        for i in range(len(data_day_0.index)):
+            if((data_day_0.iloc[i,2]-data_day_0.iloc[0,2])/data_day_0.iloc[0,2]>0.1):
+                self.label=1
+                break
+        return self.label
+
     
 def normalize(input_list):
     #input_list: np.array
@@ -225,10 +239,13 @@ def normalize(input_list):
     return input_list
 def date_to_str(date_python):#
     return date_python.strftime('%Y-%m-%d')
+
 def main():
-    one_date = date(2017,month=6,day=12)
+    one_date = date(2017,month=5,day=2)
     one_ticker = '601600'
-    one_id = input_data(one_ticker,one_date)
+    one_data = input_data_label(one_ticker,one_date)
+    x = one_data.get_input_data()
+    y = one_date.get_label_data()
 if __name__ == '__main__':
     main()
 
